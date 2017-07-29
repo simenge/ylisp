@@ -3,6 +3,8 @@ op_sub = ->(*args) { args.reduce :- }
 op_div = ->(*args) { args.reduce :/}
 op_mul = ->(*args) { args.reduce :* }
 op_mod = ->(*args) { args.reduce :% }
+op_lt = ->(*args) { args.reduce :< }
+op_gt = ->(*args) { args.reduce :> }
 eq_p = ->(*args) do
   if args.size == 1
     raise ArgumentError, "eq? requires 2+ arguments"

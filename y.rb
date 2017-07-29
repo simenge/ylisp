@@ -21,7 +21,9 @@ module YLisp
       :- => :op_sub,
       :* => :op_mul,
       :/ => :op_div,
-      :% => :op_mod
+      :% => :op_mod,
+      :> => :op_gt,
+      :< => :op_lt
     }
 
     def compile_str(s)
@@ -51,6 +53,8 @@ module YLisp
         s(:lvasgn, name, s(:block, s(:send, nil, :lambda), s(:args, *args), s(:begin, *body)))
       elsif e.first == :"->" or e.first == :lambda
         handle_lambda e
+      elsif e.first == :"quasiquote"
+        handle_quasiquote e[1..-1]
       elsif e.first == :if
         perror("if takes the form (if cond then optional-else)", !(e.size == 3 || e.size == 4))
         if e.size != 4
@@ -71,6 +75,12 @@ module YLisp
       elsif e.first == :send
         s(:send, __compile(e[1]), e[2], s(:args, *e[3..-1].map { |x| __compile x }))
       else
+        name = e[0].to_s
+        if ruby_ident? name
+          func = parse_ruby_ident name
+          args =e[1..-1].map { |x| __compile x }
+          return s(:send, *(func.children + args))
+        end
         func = __compile(e[0])
         if e.size == 1
           args = []
@@ -81,12 +91,14 @@ module YLisp
       end
     end
 
+    def ruby_ident?(x)
+      x.match /\.|::/
+    end
+
     def handle_lambda(e)
       perror("-> takes the form (-> (args) body)", e.size < 3)
       args = handle_args e[1]
-      puts args
       x=s(:block, s(:send, nil, :lambda), args, __compile([:begin, *e[2..-1]]))
-      puts x
       x
     end
 
@@ -117,6 +129,13 @@ module YLisp
           perror("argument error", name.size < 2)
           blarg = true
           args << s(:blockarg, name[1..-1].to_s)
+        elsif name[-1] == ":" # keyword arg
+          if literal?(a[i+1])
+            args << s(:kwoptarg, name[0..-2].to_sym, handle_literal(a[i+1]))
+            i += 1
+          else
+            args << s(:kwarg, name[0..-2].to_sym)
+          end
         elsif literal?(a[i+1])
           args << s(:optarg, arg, handle_literal(a[i+1]))
           i += 1
@@ -143,7 +162,7 @@ module YLisp
     end
 
     def compile_in_fn(s)
-      to_ruby empty_lambda(s(:begin, req_stdlib, __compile(SXP.read(s))))
+      to_ruby(empty_lambda(s(:begin, req_stdlib, __compile(SXP.read(s)))))
     end
 
     def handle_literal(x)
@@ -155,7 +174,7 @@ module YLisp
       when String
         s(:str, x)
       when Symbol
-        handle_sym x
+        parse_ruby_ident x
       else
         if [true, false, nil].include?(x)
           s(x.to_s.to_sym)
@@ -217,14 +236,45 @@ module YLisp
       end
     end
 
-    def handle_sym(x)
-      if OPERATORS.has_key? x
-        x = OPERATORS[x]
-      else
-        x = sanitize_identifier x
+    def handle_quasiquote(e)
+      buffer = []
+      e.each do |el|
+        if el.is_a?(Array)
+          if el.first == :unquote
+            buffer << __compile(el[1])
+          elsif el.first == :"unquote-splicing"
+            buffer += __compile(el[1..-1])
+          else
+            buffer << [:quote, el]
+          end
+        else
+          buffer << [:quote, el]
+        end
       end
-      s(:lvar, x)
+      [:array, *buffer]
     end
+
+    def parse_ruby_ident(e)
+      __parse_ruby_ident e.to_s.split /(\.|::)/
+    end
+
+    def __parse_ruby_ident(e)
+      if e.first.match(/[A-Z]/)
+        res = s(:const, nil, e.shift.to_sym)
+      else
+        res = s(:lvar, e.shift.to_sym)
+      end
+      until e.empty?
+        op = e.shift
+        if op == "."
+          res = s(:send, res, e.shift.to_sym)
+        else
+          res = s(:const, res, e.shift.to_sym)
+        end
+      end
+      res
+    end
+
 
     def sanitize_identifier(x)
       x = x.to_s.gsub("?", "_p").gsub("-", "_")
@@ -240,11 +290,12 @@ end
 def test
   include YLisp
   c = Compiler.new
+  #RubyVM::InstructionSequence.compile_option = {tailcall_optimization: true, trace_instruction: false}
   c.compile_in_fn("(begin
     (def (inc-by x) (+ x 1))
     (inc-by 1)
     ('a' | gsub 'a' 'b' | gsub 'b' ('a' | upcase))
     (if (eq? 1 1 (+ 0 (- 2 1))) (puts (+ 1 2 3)))
-    (-> (a 1 *b **c &d) a)
+    (-> (a 1 *b **c d: e: 1 &d) a)
   )")
 end
