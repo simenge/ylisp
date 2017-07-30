@@ -15,6 +15,15 @@ module YLisp
     end
   end
 
+  class YModule
+    def initialize(name, parent = nil)
+      @name, @parent = name, parent
+      @exports = []
+      @env = {}
+    end
+    attr_accessor :name, :parent, :exports, :env
+  end
+
   class Compiler
     OPERATORS = {
       :+ => :op_add,
@@ -26,8 +35,80 @@ module YLisp
       :< => :op_lt
     }
 
+    attr_accessor :module
+
+    def initialize
+      @toplevel = true
+      @module = YModule.new :Main
+    end
+
+    def leave_toplevel
+      toplevel = @toplevel
+      x = yield
+      @toplevel = toplevel
+      x
+    end
+
+    def compile_function(name:, args:, body:)
+      # This hairy bit represents the following Ruby:
+      #
+      #   define_method(name) do |*a, **k, &b|
+      #    name.call *a, **k, &b
+      #   end
+      #
+      # The idea is that by doing it this way, we have access to the
+      # parent scope, in which a local variable named the same as the
+      # method is assigned to a Proc, and we will now be able to access that,
+      # passing
+      # on all arguments to the Proc. This way we can export methods for use
+      # in Ruby or other Lisp modules while at the same time keeping our
+      # Lisp-1 namespacing, in which functions and variables live side by side.
+      @module.env[name] = s(:block,
+          s(:send, nil, :define_method,
+            s(:sym, name)),
+            s(:args, *args),
+            s(:send,
+              s(:lvar, name), :call,
+                *parse_args_call(args.children)))
+    end
+
+    # Translate argument spec AST into call AST
+    def parse_args_call(a)
+      a.map do |arg|
+        name = arg.children.first
+        if arg.type == :arg
+          s(:lvar, name)
+        elsif arg.type == :restarg
+          s(:splat, s(:lvar, name))
+        elsif arg.type == :blockarg
+          s(:block_pass, s(:lvar, name))
+        elsif arg.type == :kwarg
+          s(:pair, s(:sym, name), s(:lvar, name))
+        else
+          s(:lvar, name)
+        end
+      end
+    end
+
+    def compile_module(mod = nil)
+      mod ||= @module
+      res = []
+      @module.env.each do |key, value|
+        if @module.exports.include? key
+          res << value
+        end
+      end
+      s(:begin, *res)
+    end
+
     def compile_str(s)
       compile [:begin, SXP.read(s)]
+    end
+
+    def compile_str_module(s)
+      s = SXP.read s
+      exprs = __compile(s)
+      to_ruby wrap_in_fn(s(:begin, exprs, compile_module))
     end
 
     def compile(e)
@@ -44,15 +125,22 @@ module YLisp
       e = handle_pipes e
       if e.first == :begin
         s(:begin, *e[1..-1].map { |x| __compile x })
+      elsif e.first == :export
+        @module.exports += e[1..-1]
+        return s(:nil)
       elsif e.first == :def
         perror("def should be of the form (def (name args) body)", e.size < 3)
         perror("def should be of the form (def (name args) body)", !e[1].is_a?(Array))
         name = sanitize_identifier e[1].first
         args = handle_args e[1][1..-1]
-        body = e[2..-1].map { |x| __compile x }
+        body = leave_toplevel { e[2..-1].map { |x| __compile x } }
+        if @toplevel
+          puts "toplevel definition of #{name}"
+          compile_function name: name, args: args, body: body
+        end
         s(:lvasgn, name, s(:block, s(:send, nil, :lambda), s(:args, *args), s(:begin, *body)))
       elsif e.first == :"->" or e.first == :lambda
-        handle_lambda e
+        leavel_toplevel { handle_lambda e }
       elsif e.first == :"quasiquote"
         handle_quasiquote e[1..-1]
       elsif e.first == :if
