@@ -47,6 +47,8 @@ module YLisp
       end
     end
 
+    # (set! <var> <val>) should modify an existing binding in an enclosing
+    # scope, if one exists. This requires some trickery.
     def process(e, env = Env.new)
       if e == [] || !e.is_a?(Array)
         return e
@@ -60,6 +62,13 @@ module YLisp
         else
           lam
         end
+      elsif e.first == :def
+        if e[1].is_a? Array
+          env.set e[1].first
+        else
+          env.set e[1]
+        end
+        e
       else
         e.map { |x| process x, env }
       end

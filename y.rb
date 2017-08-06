@@ -2,8 +2,10 @@ require "unparser"
 require "parser"
 require "sxp"
 require "./stdlib.rb"
+require "./preprocessor.rb"
 
 module YLisp
+  include Preprocessor
   def s(type, *children)
     Parser::AST::Node.new(type, children)
   end
@@ -26,13 +28,13 @@ module YLisp
 
   class Compiler
     OPERATORS = {
-      :+ => :op_add,
-      :- => :op_sub,
-      :* => :op_mul,
-      :/ => :op_div,
-      :% => :op_mod,
-      :> => :op_gt,
-      :< => :op_lt
+      "+" => "__add__",
+      "-" => "__sub__",
+      "*" => "__mul__",
+      "/" => "__div__",
+      "%" => "__mod__",
+      ">" => "__gt__",
+      "<" => "__lt__"
     }
 
     attr_accessor :module
@@ -120,13 +122,14 @@ module YLisp
     end
 
     def __compile(e)
+      e = process e
       if !e.is_a? Array
-        return handle_literal e
+        return compile_literal e
       end
       if e == []
         return s(:array)
       end
-      e = handle_pipes e
+      e = compile_pipes e
       if e.first == :begin
         s(:begin, *e[1..-1].map { |x| __compile x })
       elsif e.first == :export
@@ -136,7 +139,7 @@ module YLisp
         perror("def should be of the form (def (name args) body)", e.size < 3)
         perror("def should be of the form (def (name args) body)", !e[1].is_a?(Array))
         name = sanitize_identifier e[1].first
-        args = handle_args e[1][1..-1]
+        args = compile_args e[1][1..-1]
         body = leave_toplevel { e[2..-1].map { |x| __compile x } }
         if @toplevel
           puts "toplevel definition of #{name}"
@@ -144,9 +147,9 @@ module YLisp
         end
         s(:lvasgn, name, s(:block, s(:send, nil, :lambda), s(:args, *args), s(:begin, *body)))
       elsif e.first == :"->" or e.first == :lambda
-        leavel_toplevel { handle_lambda e }
+        leave_toplevel { compile_lambda e }
       elsif e.first == :"quasiquote"
-        handle_quasiquote e[1..-1]
+        compile_quasiquote e[1..-1]
       elsif e.first == :if
         perror("if takes the form (if cond then optional-else)", !(e.size == 3 || e.size == 4))
         if e.size != 4
@@ -156,6 +159,8 @@ module YLisp
         end
         __then = __compile(e[2])
         s(:if, __compile(e[1]), __then, __else)
+      elsif e.first == :set!
+        compile_set e
       elsif OPERATORS.include?(e.first) && e.size == 3
         if e.first == :"="
           name = :"=="
@@ -187,9 +192,16 @@ module YLisp
       x.match /\.|::/
     end
 
-    def handle_lambda(e)
+    def compile_set(e)
+      perror("set! expects two arguments", e.size != 3)
+      name = e[1]
+      perror("set! expects an identifier", !name.is_a?(Symbol))
+      s(:lvasgn, name, __compile(e[2]))
+    end
+
+    def compile_lambda(e)
       perror("-> takes the form (-> (args) body)", e.size < 3)
-      args = handle_args e[1]
+      args = compile_args e[1]
       x=s(:block, s(:send, nil, :lambda), args, __compile([:begin, *e[2..-1]]))
       x
     end
@@ -198,7 +210,7 @@ module YLisp
       x.is_a?(Numeric) or x.is_a?(String) or x.is_a?(Hash)
     end
 
-    def handle_args(a)
+    def compile_args(a)
       args = []
       i = 0
       rest_arg, kwarg, blarg = false,  false, false
@@ -223,13 +235,13 @@ module YLisp
           args << s(:blockarg, name[1..-1].to_s)
         elsif name[-1] == ":" # keyword arg
           if literal?(a[i+1])
-            args << s(:kwoptarg, name[0..-2].to_sym, handle_literal(a[i+1]))
+            args << s(:kwoptarg, name[0..-2].to_sym, compile_literal(a[i+1]))
             i += 1
           else
             args << s(:kwarg, name[0..-2].to_sym)
           end
         elsif literal?(a[i+1])
-          args << s(:optarg, arg, handle_literal(a[i+1]))
+          args << s(:optarg, arg, compile_literal(a[i+1]))
           i += 1
         else
           perror("arg must be identifier", !arg.is_a?(Symbol))
@@ -257,7 +269,7 @@ module YLisp
       to_ruby(empty_lambda(s(:begin, req_stdlib, __compile(SXP.read(s)))))
     end
 
-    def handle_literal(x)
+    def compile_literal(x)
       case x
       when Integer
         s(:int, x)
@@ -266,7 +278,11 @@ module YLisp
       when String
         s(:str, x)
       when Symbol
-        parse_ruby_ident x
+        if ruby_ident? x
+          parse_ruby_ident x
+        else
+          s(:lvar, sanitize_identifier(x))
+        end
       else
         if [true, false, nil].include?(x)
           s(x.to_s.to_sym)
@@ -295,7 +311,7 @@ module YLisp
     # A sequence like (a 1 | b 2 | c 3) should return
     # (send (send (a 1) b 2) c 3) which is equivalent to
     # a(1).b(2).c(3) in Ruby
-    def handle_pipe(x)
+    def compile_pipe(x)
       if x.include? :|
         x = split_pipes x
         receiver = x[0]
@@ -310,7 +326,7 @@ module YLisp
             rest += i
             rest << :| unless idx == x.size-1
           end
-          handle_pipe([res, :|, *rest])
+          compile_pipe([res, :|, *rest])
         else
           res
         end
@@ -320,15 +336,15 @@ module YLisp
     end
 
     # handle pipes recursively
-    def handle_pipes(x)
+    def compile_pipes(x)
       if x.is_a?(Array)
-        handle_pipe x.map { |i| handle_pipes(i) }
+        compile_pipe x.map { |i| compile_pipes(i) }
       else
         x
       end
     end
 
-    def handle_quasiquote(e)
+    def compile_quasiquote(e)
       buffer = []
       e.each do |el|
         if el.is_a?(Array)
@@ -370,6 +386,9 @@ module YLisp
 
     def sanitize_identifier(x)
       x = x.to_s.gsub("?", "_p").gsub("-", "_")
+      OPERATORS.each do |key, val|
+        x.gsub! key, val
+      end
       x.to_sym
     end
 
@@ -389,5 +408,6 @@ def test
     ('a' | gsub 'a' 'b' | gsub 'b' ('a' | upcase))
     (if (eq? 1 1 (+ 0 (- 2 1))) (puts (+ 1 2 3)))
     (-> (a 1 *b **c d: e: 1 &d) a)
+    (-> () (set! inc-by 1))
   )")
 end

@@ -1,10 +1,10 @@
-op_add = ->(*args) { args.reduce :+ }
-op_sub = ->(*args) { args.reduce :- }
-op_div = ->(*args) { args.reduce :/}
-op_mul = ->(*args) { args.reduce :* }
-op_mod = ->(*args) { args.reduce :% }
-op_lt = ->(*args) { args.reduce :< }
-op_gt = ->(*args) { args.reduce :> }
+__add__ = ->(*args) { args.reduce :+ }
+__sub__ = ->(*args) { args.reduce :- }
+__div__ = ->(*args) { args.reduce :/}
+__mul__ = ->(*args) { args.reduce :* }
+__mod__ = ->(*args) { args.reduce :% }
+__lt__ = ->(*args) { args.reduce :< }
+__gt__ = ->(*args) { args.reduce :> }
 eq_p = ->(*args) do
   if args.size == 1
     raise ArgumentError, "eq? requires 2+ arguments"
@@ -15,5 +15,8 @@ eq_p = ->(*args) do
       eq_p.call *args[1..-1]
     end
   end
+end
+join = ->(*args) do
+  args.map { |x| x.to_s }.join ""
 end
 puts = method :puts
