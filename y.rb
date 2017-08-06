@@ -52,9 +52,11 @@ module YLisp
     def compile_function(name:, args:, body:)
       # This hairy bit represents the following Ruby:
       #
-      #   define_method(name) do |*a, **k, &b|
-      #    name.call *a, **k, &b
+      #   define_method(name) do |<argspec>|
+      #    name.call <argspec>
       #   end
+      #
+      # where <argspec> is the function's argument specification.
       #
       # The idea is that by doing it this way, we have access to the
       # parent scope, in which a local variable named the same as the
@@ -84,6 +86,8 @@ module YLisp
           s(:block_pass, s(:lvar, name))
         elsif arg.type == :kwarg
           s(:pair, s(:sym, name), s(:lvar, name))
+        elsif arg.type == :kwrestarg
+          s(:kwsplat, s(:lvar, name))
         else
           s(:lvar, name)
         end
