@@ -385,9 +385,16 @@ module YLisp
 
 
     def sanitize_identifier(x)
-      x = x.to_s.gsub("?", "_p").gsub("-", "_")
+      if x.match /^\W_/
+        perror("mangled identifier #{x}")
+      end
+      x = x.to_s.gsub("?", "_p")
+      x.gsub! /__gensym(\d+)/, x
       OPERATORS.each do |key, val|
-        x.gsub! key, val
+        x.gsub! key,  val
+      end
+      if x =~ /(\w+)__sub_(\w+)/
+        x = "#{$1}_#{$2}"
       end
       x.to_sym
     end
