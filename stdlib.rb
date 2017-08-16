@@ -1,22 +1,38 @@
-__add__ = ->(*args) { args.reduce :+ }
-__sub__ = ->(*args) { args.reduce :- }
-__div__ = ->(*args) { args.reduce :/}
-__mul__ = ->(*args) { args.reduce :* }
-__mod__ = ->(*args) { args.reduce :% }
-__lt__ = ->(*args) { args.reduce :< }
-__gt__ = ->(*args) { args.reduce :> }
-eq_p = ->(*args) do
-  if args.size == 1
-    raise ArgumentError, "eq? requires 2+ arguments"
-  elsif args[0] == args[1]
-    if args.size == 2
-      true
-    else
-      eq_p.call *args[1..-1]
+module YLisp
+  module STDLIB
+    def __add__(*args)
+      args.reduce :+
     end
+    def __sub__(*args)
+      args.reduce :-
+    end
+    def __div__(*args)
+      args.reduce :/
+    end
+    def __mul__(*args)
+      args.reduce :*
+    end
+    def mod(*args)
+      args.reduce :%
+    end
+    def __lt__(*args)
+      args.reduce :<
+    end
+    def __gt__(*args)
+      args.reduce :>
+    end
+    def eq_p(*args)
+      if args.size == 1
+        raise ArgumentError, "eq? requires 2+ arguments"
+      end
+      i = 0
+      while i < args.size
+        return false if args[i] != args[i+=1]
+      end
+    end
+    def join(*args)
+      args.map { |x| x.to_s }.join ""
+    end
+    puts = method :puts
   end
 end
-join = ->(*args) do
-  args.map { |x| x.to_s }.join ""
-end
-puts = method :puts

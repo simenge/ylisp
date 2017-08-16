@@ -1,5 +1,5 @@
 module YLisp
-  module Parser
+  module YParser
     require "bigdecimal"
     require "delegate"
 
@@ -10,7 +10,7 @@ module YLisp
     # attributes, as well as the __getobj__ and __setobj__(v) methods for
     # extracting or changing the underlying object being delegated to.
     class Token < SimpleDelegator
-      %i[is_a? instance_of? class].each { |m| undef_method m }
+      %i[is_a? instance_of? class ==].each { |m| undef_method m }
       def initialize(obj, file, line, col)
         super obj
         @file, @line, @col = file, line, col
@@ -48,13 +48,13 @@ module YLisp
     class NoMatch < ParseError2; end
 
 
-    class Parser
-      include YLisp::Parser
+    class YParser
+      include YLisp::YParser
       Literals = {true: true, false: false, nil: nil}
 
-      # Initialize a parser with a string, an optional file name, and an
+      # Initialize a YParser with a string, an optional file name, and an
       # optional list of literal symbols to translate into Ruby values. By
-      # default, the list of literals is Parser::Literals, i.e., the standard
+      # default, the list of literals is YParser::Literals, i.e., the standard
       # ruby names for the booleans and nil.
       def initialize(str, file: "(main)", literals: Literals)
         @str = str
@@ -369,8 +369,11 @@ module YLisp
       def parse(buffer = :begin)
         buffer = [buffer]
         saved = save
+        eat_ws_and_comments
         until eof?
-          buffer += [term]
+          t = term
+          break if t == :""
+          buffer += [t]
         end
         A(*saved, *buffer)
       end
@@ -386,7 +389,7 @@ module YLisp
 
     def test_parse(s)
       puts "Parsing: #{s}"
-      puts "=> #{Parser.new(s).term}"
+      puts "=> #{YParser.new(s).term}"
     end
 
     module_function
@@ -395,7 +398,7 @@ module YLisp
     # of the form [:begin, term1, term2, ...]
     #
     # The resulting Array and each of its elements will actually be instances
-    # of the YLisp::Parser::Token class. This is a delegator class, which means
+    # of the YLisp::YParser::Token class. This is a delegator class, which means
     # that the objects respond in every practical sense as if they were ordinary
     # Ruby objects... Arrays, Fixnums, Symbols, etc., but they also provide the
     # following handy methods: Token#file gives the filename the token originates from,
@@ -405,37 +408,45 @@ module YLisp
     # Examples:
     #
     #   include YLisp
-    #   Parser.parse_string "1 1 1" # => [:begin, 1, 1, 1]
-    #   Parser.parse_string "(set! hash {a: 1 b: (+ 1 1)})"
+    #   YParser.parse_string "1 1 1" # => [:begin, 1, 1, 1]
+    #   YParser.parse_string "(set! hash {a: 1 b: (+ 1 1)})"
     #   # => [:begin, [:set!, :hash, {:a=>1, :b=>[:+, 1, 1]}]]
     #
-    #   x = YLisp::Parser.parse_string "[{a: 2} 1]", file: "my_file"
+    #   x = YLisp::YParser.parse_string "[{a: 2} 1]", file: "my_file"
     #   # => [:begin, [:array, {:a=>2}, 1]]
     #   puts x[1][2].col # => 9
     #   puts x[1][2].file # => "my_file"
     #
-    #   p = Parser.new "'(a b c)"
+    #   p = YParser.new "'(a b c)"
     #   puts p.term # => [:quote, [:a, :b, :c]]
-    #   puts Parser.new("'a").term # => [:quote, :a]
+    #   puts YParser.new("'a").term # => [:quote, :a]
     #
-    #   YLisp::Parser.parse_string "(define a \"a\\n\")"
+    #   YLisp::YParser.parse_string "(define a \"a\\n\")"
     #   # => [:begin, [:define, :a, "a\n"]]
     #
-    #   YLisp::Parser.parse_string "[:a a]"
+    #   YLisp::YParser.parse_string "[:a a]"
     #   # => [:begin, [:array, [:quote, :a], :a]]
     #
-    #   x = YLisp::Parser.parse_string("1")[1]
+    #   x = YLisp::YParser.parse_string("1")[1]
     #   puts x+1 # => 2
     #
     #   # This is a lie. x is not actually a Fixnum but a Token, but you can
     #   # treat it exactly like a Fixnum in any practical scenario.
     #   puts x.is_a? Fixnum # => true
     #
-    #   The parser currently supports Symbols, Arrays, Hashes, Strings,
+    #   The YParser currently supports Symbols, Arrays, Hashes, Strings,
     #   identifiers, keywords, and quoted terms. TODO: quasiquote stuff.
     def parse_string(s, file: "string")
-      YLisp::Parser::Parser.new(s, file: file).parse
+      YLisp::YParser::YParser.new(s, file: file).parse
     end
+
+    def parse_term(s, file: "string")
+      YLisp::YParser::YParser.new(s, file: file).term
+    end
+
+    YNil = parse_term "nil"
+    YTrue = parse_term "true"
+    YFalse = parse_term "false"
 
   end
 end
