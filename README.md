@@ -13,7 +13,7 @@ Compile that to Ruby, and then:
     include A
     puts get # => 0
     inc by: 2
-    puts get # => 0
+    puts get # => 2
 
 So does the following:
 
