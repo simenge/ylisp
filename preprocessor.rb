@@ -74,6 +74,17 @@ module YLisp
       end
     end
 
+    def normalize_lambda(e)
+      return e unless e.is_a?(Array)
+      if e[0] == :begin
+        e[1..-1].map { |x| normalize_lambda x }
+      elsif e[0] == :"->"
+        [:lambda, e[1], *e[2..-1].map { |x| normalize_lambda x }]
+      else
+        e
+      end
+    end
+
     def handle_set(e, env)
       name, value = e[1], e[2]
       var, scope = env.get name
@@ -101,7 +112,7 @@ module YLisp
       [:ruby_eval, [:join, var, "=", val], env.sym]
     end
 
-    def test
+    def pre_test
       require "pp"
       pp process([:begin, [:set!, :x, 1], [:lambda, [], [:set!, :x, 2]]])
       pp process([:begin, [:set!, :x, 1], [:lambda, [:y], 1]])

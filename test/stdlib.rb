@@ -1,7 +1,8 @@
 module YLisp
   module STDLIB
-    EXPORTS = %i[__add__ __sub__ __div__ __mod__ __gt__ __lt__ eq_p
-                join puts]
+    EXPORTS = %i[__add__ __sub__ __mul__ __div__ __mod__ __lt__ __gt__
+      eq_p join at puts ruby_eval at_range]
+
     def __add__(*args)
       args.reduce :+
     end
@@ -14,7 +15,7 @@ module YLisp
     def __mul__(*args)
       args.reduce :*
     end
-    def __mod__(*args)
+    def mod(*args)
       args.reduce :%
     end
     def __lt__(*args)
@@ -27,14 +28,26 @@ module YLisp
       if args.size == 1
         raise ArgumentError, "eq? requires 2+ arguments"
       end
-      i = 0
-      while i < args.size
-        return false if args[i] != args[i+=1]
+      loop do
+        return true if args == []
+        x, y = args.shift, args.shift
+        return false unless x == y
       end
     end
     def join(*args)
       args.map { |x| x.to_s }.join ""
     end
-    puts = method :puts
+    def puts(*a)
+      Kernel.puts *a
+    end
+    def at(list, n)
+      list[n]
+    end
+    def at_range(list, n, m)
+      list[n..m]
+    end
+    def ruby_eval(e)
+      eval e
+    end
   end
 end

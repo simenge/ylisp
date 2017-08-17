@@ -89,6 +89,7 @@ module YLisp
       # If x is not a valid numeric literal, number? will return nil. Otherwise,
       # it will return a native Ruby Numeric type of the correct value.
       def number?(x)
+        return false unless /\d+/ =~ x
         # the .0 syntax was deprecated but still works with the Float() function
         x = "0"+x if x[0] == "."
         # We will also support exponentiation in literals
@@ -244,6 +245,10 @@ module YLisp
         eat_ws_and_comments
         if peek == "'" # quoted
           return quote_term
+        elsif peek == "`" # quasiquote
+          return quasi_term
+        elsif peek == ","
+          return unquote_term
         elsif str = string_term
           return str
         end
@@ -255,6 +260,23 @@ module YLisp
         end
         # Then it must be a basic term
         naive_term
+      end
+
+      def quasi_term
+        eat
+        [:quasiquote, term]
+      end
+
+      def unquote_term
+        eat
+        error *save, "unexpected eof, expected unquoted term", eof?
+        if peek == "@"
+          eat
+          error *save, "unexpected eof, expected unquote-splicing", eof?
+          [:unquote_splicing, term]
+        else
+          [:unquote, term]
+        end
       end
 
       def string_term
@@ -375,9 +397,18 @@ module YLisp
           break if t == :""
           buffer += [t]
         end
+        buffer = flatten_begin buffer
         A(*saved, *buffer)
       end
 
+      def flatten_begin(e)
+        return e unless e.is_a?(Array)
+        if e[0] == :begin && e[1].is_a?(Array) && e[1][0] == :begin
+          flatten_begin e[1]
+        else
+          e
+        end
+      end
 
     end
 

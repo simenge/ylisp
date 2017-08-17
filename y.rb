@@ -1,7 +1,7 @@
 require "unparser"
-require "./stdlib.rb"
-require "./preprocessor.rb"
-require "./yparser.rb"
+require_relative "./stdlib.rb"
+require_relative "./preprocessor.rb"
+require_relative "./yparser.rb"
 
 module YLisp
   include Preprocessor
@@ -25,6 +25,7 @@ module YLisp
     end
     attr_accessor :name, :exports, :env
   end
+  YMain = YModule.new(:Kernel)
 
 
   class Compiler
@@ -38,13 +39,12 @@ module YLisp
       ">" => "__gt__",
       "<" => "__lt__"
     }
-    NOOP = Generator.gensym
 
     attr_accessor :module
 
     def initialize
       @modules = []
-      @module = nil
+      @module = YMain
     end
 
     def compile_function(name:, args:, body:)
@@ -121,7 +121,6 @@ module YLisp
     def __compile(e)
       e = process e
       if !e.is_a? Array
-        debug "compiling literal #{e}"
         return compile_literal e
       end
       if e == []
@@ -136,6 +135,8 @@ module YLisp
           return handle_mod_header e[1..-1]
         end
         s(:begin, *e[1..-1].map { |x| __compile x })
+      elsif e.first == :set!
+        compile_set e
       elsif e.first == :module
         __module e
       elsif e.first == :export
@@ -144,7 +145,7 @@ module YLisp
       elsif e.first == :def
         compile_def e
       elsif e.first == :"->" or e.first == :lambda
-        leave_toplevel { compile_lambda e }
+        compile_lambda e
       elsif e.first == :"quasiquote"
         compile_quasiquote e[1..-1]
       elsif e.first == :if
@@ -156,24 +157,19 @@ module YLisp
         end
         __then = __compile(e[2])
         s(:if, __compile(e[1]), __then, __else)
-      elsif e.first == :set!
-        compile_set e
-      elsif OPERATORS.include?(e.first) && e.size == 3
-        if e.first == :"="
-          name = :"=="
-        else
-          name = e.first
-        end
-        return s(:send, __compile(e[1]), e.first,
-          __compile(e[2]))
       elsif e.first == :send
         s(:send, __compile(e[1]), e[2], s(:args, *e[3..-1].map { |x| __compile x }))
       else # call
-        name = e[0].to_s
-        if ruby_ident? name
-          func = parse_ruby_ident name
-          args =e[1..-1].map { |x| __compile x }
-          return s(:send, *(func.children + args))
+        func = e.first
+        if func.is_a? Symbol
+          args = e[1..-1].map { |x| __compile x }
+          if ruby_ident? func
+            func = parse_ruby_ident func
+            return s(func.type, *(func.children+args))
+          else
+            func = sanitize_identifier func
+          end
+          return s(:send, compile_literal(func), :call, *args)
         end
         func = __compile(e[0])
         if e.size == 1
@@ -186,7 +182,7 @@ module YLisp
     end
 
     def ruby_ident?(x)
-      x.match /\.|::/
+      x.is_a?(Symbol) && x.match(/\.|::/)
     end
 
     def compile_set(e)
@@ -212,67 +208,57 @@ module YLisp
       args = []
       i = 0
       rest_arg, kwarg, blarg = false,  false, false
-      debug "compile_args: #{a.inspect}"
       while i<a.size
         arg = a[i]
         if arg.is_a? Array
           if arg.size == 2 && arg[0] == :keyword # kwarg
             perror("unexpected kwarg, already saw keyword splat", kwarg)
             name = arg[1]
-            debug "kwarg: #{arg}"
             if literal?(a[i+1])
               args << s(:kwoptarg, name[0..-2].to_sym, compile_literal(a[i+1]))
-              debug("i = #{i+= 1}")
+              i += 1
             else
               args << s(:kwarg, name[0..-2].to_sym)
             end
-            debug("i = #{i+= 1}")
+            i += 1
           else
             perror("invalid argument #{arg}")
           end
         else
           name = arg.to_s
-          debug "name: #{name}"
-          name = arg.to_s
           if name.start_with?("**") #  kwarg
             perror("may only have one **arg per function", kwarg)
             perror("argument error", name.size < 3)
-            args << s(:kwrestarg, name[2..-1].to_sym)
+            args << s(:kwrestarg, sanitize_identifier(name[2..-1].to_sym))
             kwarg = true
           elsif name.start_with?("*") # rest arg
             perror("may only have one *arg per function", rest_arg)
             perror("argument error", name.size < 2)
-            args << s(:restarg, name[1..-1].to_s)
+            args << s(:restarg, sanitize_identifier(name[1..-1].to_s))
             rest_arg = true
           elsif name.start_with?("&") # block arg
             perror("may only have one block arg", blarg)
             perror("block arg must be last arg", i!=a.size-1)
             perror("argument error", name.size < 2)
             blarg = true
-            args << s(:blockarg, name[1..-1].to_s)
+            args << s(:blockarg, sanitize_identifier(name[1..-1].to_s))
           elsif literal?(a[i+1])
-            debug("lit: #{a[i+1].inspect}")
-            args << s(:optarg, arg, compile_literal(a[i+1]))
-            debug("i = #{i+= 1}")
+            args << s(:optarg, sanitize_identifier(arg), compile_literal(a[i+1]))
           else
             perror("arg must be identifier", !arg.is_a?(Symbol))
-            args << s(:arg, arg)
+            args << s(:arg, sanitize_identifier(arg))
           end
-          debug("i = #{i+= 1}")
         end
+        i += 1
       end
       s(:args, *args)
     end
 
-    def empty_lambda(body, call: true)
+    def empty_lambda(body, call: tru)
       body.shift if body.first == :begin
       x = s(:block, s(:send, nil, :lambda), s(:args), s(:begin, *body))
       x = s(:send, x, :call) if call
       x
-    end
-
-    def wrap_in_fn(*body)
-      to_ruby(empty_lambda(body))
     end
 
     def req_stdlib
@@ -285,9 +271,19 @@ module YLisp
       s(:begin, req_stdlib, load_module(STDLIB))
     end
 
-    def compile_in_fn(s, call: false)
-       s= wrap_in_fn(:begin, load_stdlib, *__compile(YParser.parse_string(s)))
-       s
+    def compile_in_fn(s, call: true, stdlib: true, ruby: true)
+      if stdlib
+        args = [:begin, load_stdlib]
+      else
+        args = [:begin]
+      end
+      args = [*args, *__compile(YParser.parse_string(s))]
+      s = empty_lambda(args, call: call)
+      if ruby
+        to_ruby s
+      else
+        s
+      end
     end
 
     def load_module(m, names = :all)
@@ -302,7 +298,7 @@ module YLisp
       buff = s(:begin, include_mod(m), *buff)
     end
 
-    def define_module(name, body, default = YModule.new(:Kernel, [], {}))
+    def define_module(name, body)
       add_module name
       sym = Generator.gensym
       parent = default
@@ -341,14 +337,7 @@ module YLisp
     end
 
     def add_module(name)
-      @modules << @module if @module
-      # To Ruby methods, delegator objects ar mostly indistinguishable
-      # from the objects they delegate to. But Ruby internals cares little
-      # for such tricks, so in this instance, since name is assumed to be a
-      # Token, we must extract the real object first.
-      Kernel.const_set name.__getobj__, Module.new
       @module = YModule.new name, [], {}
-      s(:nil)
     end
 
     def handle_mod_header(e)
@@ -369,9 +358,10 @@ module YLisp
 
     # This handles module headers
     def __module(e)
+      name = e[1]
       perror("module requires 1 argument", e.size != 2)
-      add_module e[1]
-
+      add_module name
+      ast_for_mod_def name
     end
 
     def compile_def(e)
@@ -386,19 +376,23 @@ module YLisp
       if @module
         res2 = def_module_function name: name, args: args, body: body
       else
-        res2 = s(:nil)
+        res2 = nil
       end
       name = sanitize_identifier name
-      s(:begin, res2,
-        s(:lvasgn, name, s(:block, s(:send, nil, :lambda), s(:args, *args),
-          s(:begin, *body))))
+      res1 = s(:lvasgn, name, s(:block, s(:send, nil, :lambda), s(:args, *args),
+        s(:begin, *body)))
+      if res2
+        s(:begin, res1, res2)
+      else
+        res1
+      end
     end
 
     def def_module_function(name:, args:, body:)
       mod = @module
       res = s(:block,
               s(:send,
-              s(:const, nil, @module.name), :instance_eval),
+              s(:const, nil, @module.name), :module_eval),
               s(:args),
               s(:block,
                 s(:send, nil, :define_method,
@@ -407,11 +401,26 @@ module YLisp
                 s(:begin, *body)))
     end
 
+    def ast_for_mod_def(module_name)
+      s(:begin,
+        s(:or_asgn,
+          s(:casgn,
+            s(:const, nil, :Kernel), module_name),
+          s(:send,
+            s(:const, nil, :Module), :new)),
+        s(:or_asgn,
+          s(:casgn,
+            s(:const, nil, module_name), :EXPORTS),
+          s(:hash)))
+    end
+
     def compile_literal(x)
       # Case statement doesn"t work for some reason with delegator objects,
-      # evem when forwarding #===
+      # even when forwarding #===
       if x == :""
-        s(:nop) # temporary hack
+        s(:nil) # temporary hack
+      elsif ruby_ident? x
+        parse_ruby_ident x
       elsif x.is_a? Integer
         s(:int, x)
       elsif x.is_a? Float
@@ -419,12 +428,7 @@ module YLisp
       elsif x.is_a? String
         s(:str, x)
       elsif x.is_a? Symbol
-        debug "got symbol #{x.inspect}"
-        if ruby_ident? x
-          parse_ruby_ident x
-        else
-          s(:lvar, x)
-        end
+        s(:lvar, sanitize_identifier(x))
       else
         if [YNil, YFalse, YTrue].include?(x)
           s(x.to_s.to_sym)
@@ -556,53 +560,4 @@ module YLisp
       Unparser.unparse x
     end
   end
-end
-
-### Testing
-### Refactor or remove before release
-include YLisp
-C = Compiler.new
-
-$debug = ""
-def debug x
-  $debug += "#{x}\n"
-end
-
-TEST = %{(begin
-  (module A)
-  (export f)
-  (set u 1)
-  (def (f x) (set u 2) (+ 1 x))
-  (def (u!) (puts u))
-  )}
-
-def test
-  include YLisp
-  c = Compiler.new
-  #RubyVM::InstructionSequence.compile_option = {tailcall_optimization: true, trace_instruction: false}
-  c.compile_in_fn(TEST)
-end
-
-def test_parser
-  include YLisp
-  require "pp"
-  begin
-  pp P.new(TEST).parse
-  rescue Exception => e
-    msg, line, col = e.msg, e.line, e.col
-  puts "parse error: #{msg} @ #{line}:#{col}"
-  end
-end
-
-C=Compiler.new
-
-def test_mod
-  body = %{(begin
-    (module A)
-    (export a)
-    (def (inc a) (+ a 1)))
-  }
-  c = Compiler.new
-  x = c.__compile P.new(body).term
-  x
 end
